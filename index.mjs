@@ -126,6 +126,49 @@ async function resolveManagementKey(configDir, options) {
   return (await readFile(keyPath, 'utf8')).trim()
 }
 
+async function isAlreadyServing(host, port, managementKey) {
+  try {
+    const probeHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host
+    const res = await fetch(`http://${probeHost}:${port}${management}auth-files`, {
+      headers: { Authorization: 'Bearer ' + managementKey },
+      redirect: 'error',
+      signal: AbortSignal.timeout(1500),
+    })
+    return res.status === 200
+  } catch {
+    return false
+  }
+}
+
+async function listenWithRetry(server, port, host, managementKey, retries = 8, delayMs = 250) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await new Promise((resolveListen, rejectListen) => {
+        const onError = err => {
+          server.off('listening', onListening)
+          rejectListen(err)
+        }
+        const onListening = () => {
+          server.off('error', onError)
+          resolveListen()
+        }
+        server.once('error', onError)
+        server.once('listening', onListening)
+        server.listen(port, host)
+      })
+      return true
+    } catch (err) {
+      if (err?.code !== 'EADDRINUSE') throw err
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, delayMs))
+        continue
+      }
+      if (await isAlreadyServing(host, port, managementKey)) return false
+      throw err
+    }
+  }
+}
+
 let listener
 async function start(options = {}) {
   if (listener) return listener
@@ -160,17 +203,15 @@ async function start(options = {}) {
     },
   })
 
-  await new Promise((resolveListen, rejectListen) => {
-    server.once('error', rejectListen)
-    server.listen(port, host, resolveListen)
-  })
+  const bound = await listenWithRetry(server, port, host, managementKey)
+  if (!bound) return null
   listener = server
   return server
 }
 
 export async function MagpieCliProxyUsagePlugin(_input, options) {
   const server = await start(options)
-  server.unref()
+  server?.unref()
   return {}
 }
 
