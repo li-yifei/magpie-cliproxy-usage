@@ -1,76 +1,77 @@
 # magpie-cliproxy-usage
 
-A [Magpie](https://usemagpie.ai) plugin that exposes your active Magpie subscription quota snapshots through a **CLIProxyAPI-compatible management usage API** (`/v0/management/auth-files` and `/v0/management/api-call`).
+Expose cached quota readings from your local [Magpie](https://usemagpie.ai) gateway through a read-only subset of the CLIProxyAPI management API. Clients such as T3 Code can poll Codex, Claude, Antigravity, and Grok (xAI) through one endpoint.
 
-Any client that supports CLIProxyAPI usage/quota polling (such as T3 Code, menu-bar quota monitors, or custom scripts) can read quotas for **Codex**, **Claude**, **Antigravity**, and **Grok (xAI)** directly from your local Magpie gateway.
+## Install and configure
 
-> 将本机 Magpie 所有有效订阅供应商的额度快照转译为 **CLIProxyAPI 兼容格式** 的用量管理接口，可在 Magpie 插件页直接点击 **Options** 配置端口与要暴露/排除的供应商。
-
-## Install
-
-In Magpie:
-
-- **Settings → Plugins → Discover → Unofficial** → search `magpie-cliproxy-usage` → **Install**
-
-Or via CLI:
+In Magpie, open **Settings → Plugins → Discover → Unofficial** and install **magpie-cliproxy-usage**. You can also install it from the CLI.
 
 ```sh
 magpie plugin add github:li-yifei/magpie-cliproxy-usage
 ```
 
-## Configuration (GUI & CLI)
-
-Open **Settings → Plugins → Installed**, find **magpie-cliproxy-usage**, and click **Options** to edit its JSON config (saving automatically restarts the plugin with the new settings):
+In Magpie v0.1.4734, open **Settings → Plugins → Installed**, find the plugin, and choose **Options** to edit its JSON. Saving retires the current plugin host. Magpie starts a replacement when it next needs the plugin. If the previous host still holds the port, the replacement retries until the port becomes free.
 
 ```json
 {
-  "port": 3426,
-  "host": "127.0.0.1",
-  "includeProviders": [],
-  "excludeProviders": [],
-  "includeRemote": false
+	"port": 3426,
+	"host": "127.0.0.1",
+	"includeProviders": [],
+	"excludeProviders": [],
+	"includeRemote": false,
+	"allowNonLoopback": false
 }
 ```
 
-Or configure via CLI:
+To set options from the CLI, pass the complete JSON object you want to save.
 
 ```sh
 magpie plugin options magpie-cliproxy-usage '{"port":3426,"excludeProviders":["claude"]}'
 ```
 
-| Option | Env Variable | Default | Description |
+| Option | Environment variable | Default | Accepted values |
 | --- | --- | --- | --- |
-| `port` | `MAGPIE_CLIPROXY_USAGE_PORT` | `3426` | Port the loopback usage server listens on (`1–65535`). |
-| `host` | `MAGPIE_CLIPROXY_USAGE_HOST` | `127.0.0.1` | Bind address. |
-| `managementKey` | `MAGPIE_CLIPROXY_MANAGEMENT_KEY` | `~/.config/magpie/cliproxy-usage-management.key` | Bearer token (auto-generated with mode `0600` on first run if absent). |
-| `includeProviders` | — | `[]` (all) | Whitelist of Magpie provider IDs (e.g. `["codex", "claude", "agy-cli", "s2a/codex"]`) or CLIProxyAPI types (`"codex"`, `"claude"`, `"antigravity"`, `"xai"`). |
-| `excludeProviders` | — | `[]` (none) | Blacklist of provider IDs or CLIProxyAPI types to hide. |
-| `includeRemote` | — | `false` | Whether to expose remote-forwarded Magpie cards (e.g. `s2a/codex`). Explicitly naming a remote ID in `includeProviders` also includes it. |
+| `port` | `MAGPIE_CLIPROXY_USAGE_PORT` | `3426` | An integer or a string of decimal digits from 1 through 65535. |
+| `host` | `MAGPIE_CLIPROXY_USAGE_HOST` | `127.0.0.1` | A non-empty bind address. By default it must be an IPv4 loopback address, `::1`, or `localhost`, which binds to `127.0.0.1`. |
+| `managementKey` | `MAGPIE_CLIPROXY_MANAGEMENT_KEY` | Key from disk or generated on first use | A non-empty string of visible ASCII characters. Leading and trailing whitespace is trimmed. |
+| `includeProviders` | — | `[]` | An array of provider IDs, provider names without their remote prefix, or CLIProxyAPI provider types. An empty array allows all supported providers subject to the remote and exclusion rules. |
+| `excludeProviders` | — | `[]` | An array of provider IDs, provider names without their remote prefix, or CLIProxyAPI provider types. Exclusions take precedence over includes. |
+| `includeRemote` | — | `false` | A JSON boolean. With `false`, each allowed remote provider must appear by its full ID in `includeProviders`. |
+| `allowNonLoopback` | — | `false` | A JSON boolean. Set to `true` to allow a bind outside loopback. |
 
-## Supported Providers & Endpoints
+Options take precedence over environment variables. The port and key also accept the legacy variables `MAGPIE_T3_USAGE_PORT` and `MAGPIE_T3_MANAGEMENT_KEY` after their current counterparts.
 
-All endpoints require `Authorization: Bearer <managementKey>`.
+Provider filters ignore case and surrounding whitespace. With `includeRemote: false`, `["codex"]` includes local Codex and `["s2a/codex"]` includes just that remote Codex provider. With `includeRemote: true`, a non-empty include list still applies. The authenticated `/v0/management/providers` endpoint lists discovered IDs and shows which ones produced a pollable entry.
 
-- `GET /v0/management/auth-files` — lists all enabled providers that have numeric quota windows.
-- `GET /v0/management/providers` — lists every quota provider discovered from local Magpie along with its `enabled` state (handy for checking exact provider IDs).
-- `POST /v0/management/api-call`:
-  - **Codex** (`codex`): `GET https://chatgpt.com/backend-api/wham/usage` and `GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`
-  - **Claude** (`claude`): `GET https://api.anthropic.com/api/oauth/usage` (5-hour, 7-day, and weekly model-scoped limits)
-  - **Antigravity** (`antigravity`, `agy-cli`): `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
-  - **Grok / xAI** (`grok`, `xai`): `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`
+## Connect a client
 
-## Management Key
+Set the client's base URL to `http://127.0.0.1:3426` or your configured address and port. For IPv6 loopback, use `http://[::1]:3426`. Set the management key to the value supplied in the options or environment, or read it from the Magpie config directory.
 
-On first start, the plugin automatically generates a random Bearer token and saves it (mode `0600`) to:
+The config directory is `$XDG_CONFIG_HOME/magpie` when set and `~/.config/magpie` otherwise. The plugin uses `cliproxy-usage-management.key` when present. If that file is absent, it checks `t3-usage-management.key` for an existing key. If neither supplies a key, or if the primary file is empty, the plugin generates a new primary key. Key files used by the plugin have mode `0600`.
 
-```text
-~/.config/magpie/cliproxy-usage-management.key
-```
+Each request requires `Authorization: Bearer <key>` or `X-Management-Key: <key>`. The server uses plain HTTP. A non-loopback bind can expose the key, account labels, and quota data to the network. Keep loopback enabled unless access is restricted and the connection is protected, for example by a TLS reverse proxy.
 
-Configure your CLIProxyAPI-compatible client with:
+## Supported management API
 
-- **Base URL**: `http://127.0.0.1:3426` (or your configured `port`)
-- **Management Key**: contents of `~/.config/magpie/cliproxy-usage-management.key`
+All routes are under `/v0/management/`.
+
+| Route | Result |
+| --- | --- |
+| `GET auth-files` | Synthetic auth-file entries for supported providers with readable quota data. |
+| `GET providers` | Discovered provider IDs, remote status, account count, quota availability, and whether an auth-file entry exists. |
+| `POST api-call` | Local responses for the operations below. Send a JSON body of at most 16 KiB with `auth_index`, `authIndex`, or `AuthIndex`, plus `method` and `url`. The response envelope contains `status_code`, `header`, and a JSON-encoded `body`. |
+| `GET auth-files/models` | HTTP 501. Per-account model routing is unavailable. |
+
+| Provider | Supported `api-call` operations |
+| --- | --- |
+| Codex (`codex`) | `GET https://chatgpt.com/backend-api/wham/usage` for 5-hour and weekly quota. The `rate-limit-reset-credits` lookup returns HTTP 501. |
+| Claude (`claude`) | `GET https://api.anthropic.com/api/oauth/usage` for 5-hour, 7-day, and weekly model-scoped quota. |
+| Antigravity (`antigravity`, `agy-cli`) | `POST` to a path ending in `:retrieveUserQuotaSummary` for pool quotas or `:fetchAvailableModels` for per-model quotas. Each operation returns HTTP 501 if its data is absent. The Google user-info lookup reports unavailable. |
+| Grok (`grok`, `xai`) | `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` for the current subscription allowance. |
+
+The bridge averages each quota window across the accounts that report it, using one reading per account. It reports a shared reset only when every contributing account agrees. Remote account IDs are opaque. Clients should use the `auth_index` returned by `auth-files`. The `method` field is case-insensitive.
+
+The bridge caches successful gateway reads for 15 seconds and failures for 3 seconds. An `api-call` URL selects a local translation. The bridge sends no vendor requests and performs no account changes.
 
 ## License
 
