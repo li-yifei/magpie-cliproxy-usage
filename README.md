@@ -1,10 +1,10 @@
 # magpie-cliproxy-usage
 
-A [Magpie](https://usemagpie.ai) plugin that exposes your local Magpie subscription quota snapshots through a **CLIProxyAPI-compatible management usage API** (`/v0/management/auth-files` and `/v0/management/api-call`).
+A [Magpie](https://usemagpie.ai) plugin that exposes your active Magpie subscription quota snapshots through a **CLIProxyAPI-compatible management usage API** (`/v0/management/auth-files` and `/v0/management/api-call`).
 
-Any client that supports CLIProxyAPI usage/quota polling (such as T3 Code, menu-bar quota monitors, or custom scripts) can read Magpie's local Codex subscription quotas directly from this endpoint.
+Any client that supports CLIProxyAPI usage/quota polling (such as T3 Code, menu-bar quota monitors, or custom scripts) can read quotas for **Codex**, **Claude**, **Antigravity**, and **Grok (xAI)** directly from your local Magpie gateway.
 
-> 将本机 Magpie 的订阅额度快照转译为 **CLIProxyAPI 兼容格式** 的用量管理接口（`/v0/management/auth-files` 与 `/v0/management/api-call`），供 T3 Code 或任何支持 CLIProxyAPI 额度查询的客户端读取。
+> 将本机 Magpie 所有有效订阅供应商的额度快照转译为 **CLIProxyAPI 兼容格式** 的用量管理接口，可在 Magpie 插件页直接点击 **Options** 配置端口与要暴露/排除的供应商。
 
 ## Install
 
@@ -18,16 +18,48 @@ Or via CLI:
 magpie plugin add github:li-yifei/magpie-cliproxy-usage
 ```
 
-## How It Works
+## Configuration (GUI & CLI)
 
-1. The plugin starts a loopback HTTP listener on `127.0.0.1:3426` inside Magpie's plugin host.
-2. On each request (cached for 15 seconds), it reads `/v1/magpie/quotas/cards` from the local Magpie gateway (`gateway.json`).
-3. Native Codex subscription cards (`provider === "codex" && kind === "subscription"`) are aggregated into a single `native-codex` entry:
-   - `5 hours` → `primary_window` (`limit_window_seconds: 18000`)
-   - `7 days` → `secondary_window` (`limit_window_seconds: 604800`)
-   - Multiple accounts are averaged with equal weight; `reset_at` is included only when all contributing accounts share the same reset timestamp.
+Open **Settings → Plugins → Installed**, find **magpie-cliproxy-usage**, and click **Options** to edit its JSON config (saving automatically restarts the plugin with the new settings):
 
-## Management Key & Configuration
+```json
+{
+  "port": 3426,
+  "host": "127.0.0.1",
+  "includeProviders": [],
+  "excludeProviders": [],
+  "includeRemote": false
+}
+```
+
+Or configure via CLI:
+
+```sh
+magpie plugin options magpie-cliproxy-usage '{"port":3426,"excludeProviders":["claude"]}'
+```
+
+| Option | Env Variable | Default | Description |
+| --- | --- | --- | --- |
+| `port` | `MAGPIE_CLIPROXY_USAGE_PORT` | `3426` | Port the loopback usage server listens on (`1–65535`). |
+| `host` | `MAGPIE_CLIPROXY_USAGE_HOST` | `127.0.0.1` | Bind address. |
+| `managementKey` | `MAGPIE_CLIPROXY_MANAGEMENT_KEY` | `~/.config/magpie/cliproxy-usage-management.key` | Bearer token (auto-generated with mode `0600` on first run if absent). |
+| `includeProviders` | — | `[]` (all) | Whitelist of Magpie provider IDs (e.g. `["codex", "claude", "agy-cli", "s2a/codex"]`) or CLIProxyAPI types (`"codex"`, `"claude"`, `"antigravity"`, `"xai"`). |
+| `excludeProviders` | — | `[]` (none) | Blacklist of provider IDs or CLIProxyAPI types to hide. |
+| `includeRemote` | — | `false` | Whether to expose remote-forwarded Magpie cards (e.g. `s2a/codex`). Explicitly naming a remote ID in `includeProviders` also includes it. |
+
+## Supported Providers & Endpoints
+
+All endpoints require `Authorization: Bearer <managementKey>`.
+
+- `GET /v0/management/auth-files` — lists all enabled providers that have numeric quota windows.
+- `GET /v0/management/providers` — lists every quota provider discovered from local Magpie along with its `enabled` state (handy for checking exact provider IDs).
+- `POST /v0/management/api-call`:
+  - **Codex** (`codex`): `GET https://chatgpt.com/backend-api/wham/usage` and `GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`
+  - **Claude** (`claude`): `GET https://api.anthropic.com/api/oauth/usage` (5-hour, 7-day, and weekly model-scoped limits)
+  - **Antigravity** (`antigravity`, `agy-cli`): `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
+  - **Grok / xAI** (`grok`, `xai`): `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`
+
+## Management Key
 
 On first start, the plugin automatically generates a random Bearer token and saves it (mode `0600`) to:
 
@@ -35,34 +67,10 @@ On first start, the plugin automatically generates a random Bearer token and sav
 ~/.config/magpie/cliproxy-usage-management.key
 ```
 
-(Respects `XDG_CONFIG_HOME`; if an existing `t3-usage-management.key` is present, it is reused automatically.)
-
 Configure your CLIProxyAPI-compatible client with:
 
-- **Base URL**: `http://127.0.0.1:3426`
+- **Base URL**: `http://127.0.0.1:3426` (or your configured `port`)
 - **Management Key**: contents of `~/.config/magpie/cliproxy-usage-management.key`
-
-### Optional Settings
-
-You can override defaults via Magpie plugin options (`magpie plugin options magpie-cliproxy-usage '{"port":3426}'`) or environment variables:
-
-| Option | Environment Variable | Default |
-| --- | --- | --- |
-| `port` | `MAGPIE_CLIPROXY_USAGE_PORT` | `3426` |
-| `host` | `MAGPIE_CLIPROXY_USAGE_HOST` | `127.0.0.1` |
-| `managementKey` | `MAGPIE_CLIPROXY_MANAGEMENT_KEY` | `~/.config/magpie/cliproxy-usage-management.key` |
-
-## Supported Endpoints
-
-All endpoints require `Authorization: Bearer <managementKey>`.
-
-- `GET /v0/management/auth-files` — lists `native-codex` when local Codex subscription quotas are available.
-- `POST /v0/management/api-call` — supports `GET https://chatgpt.com/backend-api/wham/usage` for `auth_index: "native-codex"`.
-- `GET /v0/management/auth-files/models` — returns `501` (not applicable).
-
-## Remote Quotas
-
-Each plugin instance reads only from the Magpie gateway on the same host. To query quotas from a remote Magpie instance, install this plugin on that remote host and access its loopback port over a protected tunnel (e.g., SSH port forwarding or Tailscale).
 
 ## License
 

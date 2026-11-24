@@ -6,27 +6,231 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const management = '/v0/management/'
-const wham = 'https://chatgpt.com/backend-api/wham/'
-const windows = new Map([['5 hours', 18000], ['7 days', 604800]])
-const accountId = 'native-codex'
+const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
+const CODEX_CREDITS_URL = 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits'
+const CLAUDE_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
+const ANTIGRAVITY_SUMMARY_URL = 'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary'
+const ANTIGRAVITY_MODELS_URL = 'https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels'
+const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo'
+const GROK_USAGE_URL = 'https://cli-chat-proxy.grok.com/v1/billing?format=credits'
 
+const windowDurations = new Map([['5 hours', 18000], ['7 days', 604800]])
 const keyFileName = 'cliproxy-usage-management.key'
 const legacyKeyFileName = 't3-usage-management.key'
 
-function quotaWindow(cards, duration) {
-  const readings = cards.flatMap(card => (card.windows ?? []).filter(window =>
-    windows.get(window.name) === duration && !window.text && !window.unlimited &&
-    Number.isFinite(window.used)))
+function clampPercent(value) {
+  return Math.max(0, Math.min(100, value))
+}
+
+function numericWindows(card) {
+  return (card.windows ?? []).filter(w => !w.text && !w.unlimited && Number.isFinite(w.used))
+}
+
+function isRemoteCard(card) {
+  return Boolean(card.from) || String(card.provider ?? '').includes('/')
+}
+
+function baseProviderName(providerId) {
+  const raw = String(providerId ?? '').trim().toLowerCase()
+  const leaf = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw
+  return leaf.replace(/-plugin$/, '')
+}
+
+function cliProxyProviderOf(providerId) {
+  switch (baseProviderName(providerId)) {
+    case 'codex':
+      return 'codex'
+    case 'claude':
+      return 'claude'
+    case 'antigravity':
+    case 'agy-cli':
+      return 'antigravity'
+    case 'grok':
+    case 'xai':
+      return 'xai'
+    default:
+      return null
+  }
+}
+
+function normalizeFilterList(value) {
+  if (!Array.isArray(value)) return []
+  return value.map(v => String(v ?? '').trim().toLowerCase()).filter(Boolean)
+}
+
+function matchesFilter(card, mappedProvider, list) {
+  const id = String(card.provider ?? '').trim().toLowerCase()
+  const base = baseProviderName(id)
+  const mapped = String(mappedProvider ?? '').toLowerCase()
+  return list.includes(id) || list.includes(base) || (mapped !== '' && list.includes(mapped))
+}
+
+function accountIdFor(providerId) {
+  if (providerId === 'codex') return 'native-codex'
+  return 'magpie-' + String(providerId).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+}
+
+function accountLabelFor(cards, providerId) {
+  if (cards.length === 1) {
+    const c = cards[0]
+    if (c.user && c.name) return `${c.name} (${c.user})`
+    return c.user || c.name || providerId
+  }
+  const name = cards[0]?.name || providerId
+  return `${name} (${cards.length} accounts)`
+}
+
+function averageWindow(cards, predicate) {
+  const readings = cards.flatMap(card => numericWindows(card).filter(predicate))
   if (readings.length === 0) return null
-  const used = readings.reduce((sum, window) =>
-    sum + Math.max(0, Math.min(100, window.used)), 0)
-  const reset = Date.parse(readings[0].resetsAt)
+  const used = readings.reduce((sum, w) => sum + clampPercent(w.used), 0) / readings.length
+  const firstReset = Date.parse(readings[0].resetsAt)
+  const sameReset = Number.isFinite(firstReset) &&
+    readings.length === cards.length &&
+    readings.every(w => Date.parse(w.resetsAt) === firstReset)
   return {
-    used_percent: used / readings.length,
-    reset_at: Number.isFinite(reset) && readings.length === cards.length &&
-      readings.every(window => Date.parse(window.resetsAt) === reset)
-      ? Math.floor(reset / 1000) : null,
-    limit_window_seconds: duration,
+    used,
+    resetMs: sameReset ? firstReset : null,
+    resetIso: sameReset ? new Date(firstReset).toISOString() : null,
+  }
+}
+
+function buildCodexUsage(cards) {
+  const primary = averageWindow(cards, w => windowDurations.get(w.name) === 18000)
+  const secondary = averageWindow(cards, w => windowDurations.get(w.name) === 604800)
+  if (!primary && !secondary) return null
+  const format = (w, secs) => w ? {
+    used_percent: w.used,
+    reset_at: w.resetMs === null ? null : Math.floor(w.resetMs / 1000),
+    limit_window_seconds: secs,
+  } : null
+  const plan = cards.find(c => c.plan)?.plan
+  return {
+    ...(plan ? { plan_type: plan } : {}),
+    rate_limit: {
+      primary_window: format(primary, 18000),
+      secondary_window: format(secondary, 604800),
+    },
+  }
+}
+
+function buildCodexCredits(cards) {
+  if (cards.length !== 1) return null
+  const each = cards[0]?.resets?.each
+  if (!Array.isArray(each) || each.length === 0) return null
+  return {
+    credits: each.filter(c => c?.id && c?.until).map(c => ({
+      id: String(c.id),
+      status: 'available',
+      reset_type: 'rate_limit',
+      expires_at: String(c.until),
+    })),
+  }
+}
+
+function buildClaudeUsage(cards) {
+  const fiveHour = averageWindow(cards, w => w.name === '5 hours')
+  const sevenDay = averageWindow(cards, w => w.name === '7 days')
+  const scopedNames = [...new Set(
+    cards.flatMap(c => numericWindows(c))
+      .map(w => /^7 days\s*[·-]\s*(.+)$/i.exec(w.name)?.[1]?.trim())
+      .filter(Boolean),
+  )]
+  const limits = []
+  for (const modelName of scopedNames) {
+    const avg = averageWindow(cards, w => {
+      const m = /^7 days\s*[·-]\s*(.+)$/i.exec(w.name)?.[1]?.trim()
+      return m === modelName
+    })
+    if (avg) {
+      limits.push({
+        kind: 'weekly_scoped',
+        percent: avg.used,
+        resets_at: avg.resetIso,
+        scope: { model: { display_name: modelName } },
+      })
+    }
+  }
+  if (!fiveHour && !sevenDay && limits.length === 0) return null
+  return {
+    five_hour: fiveHour ? { utilization: fiveHour.used, resets_at: fiveHour.resetIso } : null,
+    seven_day: sevenDay ? { utilization: sevenDay.used, resets_at: sevenDay.resetIso } : null,
+    ...(limits.length > 0 ? { limits } : {}),
+  }
+}
+
+function antigravityBucketPrefix(pool) {
+  const p = String(pool ?? '').toLowerCase()
+  if (p.includes('gemini')) return 'gemini'
+  if (p.includes('claude') || p.includes('gpt')) return '3p'
+  return p.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'pool'
+}
+
+function buildAntigravitySummary(cards) {
+  const pools = [...new Set(
+    cards.flatMap(c => numericWindows(c))
+      .filter(w => w.pool && (w.name === '5 hours' || w.name === '7 days'))
+      .map(w => w.pool),
+  )]
+  const groups = []
+  for (const pool of pools) {
+    const prefix = antigravityBucketPrefix(pool)
+    const buckets = []
+    for (const [winName, winKind] of [['5 hours', '5h'], ['7 days', 'weekly']]) {
+      const avg = averageWindow(cards, w => w.pool === pool && w.name === winName)
+      if (!avg) continue
+      buckets.push({
+        bucketId: `${prefix}-${winKind}`,
+        displayName: pool,
+        window: winKind,
+        remainingFraction: Math.max(0, Math.min(1, 1 - avg.used / 100)),
+        ...(avg.resetIso ? { resetTime: avg.resetIso } : {}),
+      })
+    }
+    if (buckets.length > 0) {
+      groups.push({ displayName: pool, buckets })
+    }
+  }
+  if (groups.length === 0) return null
+  return { groups }
+}
+
+function buildGrokUsage(cards) {
+  const avg = averageWindow(cards, () => true)
+  if (!avg) return null
+  return {
+    config: {
+      creditUsagePercent: avg.used,
+      currentPeriod: avg.resetIso ? { end: avg.resetIso } : {},
+    },
+  }
+}
+
+function buildEntry(providerId, mappedProvider, cards) {
+  let payload = null
+  if (mappedProvider === 'codex') payload = buildCodexUsage(cards)
+  else if (mappedProvider === 'claude') payload = buildClaudeUsage(cards)
+  else if (mappedProvider === 'antigravity') payload = buildAntigravitySummary(cards)
+  else if (mappedProvider === 'xai') payload = buildGrokUsage(cards)
+  if (!payload) return null
+
+  const id = accountIdFor(providerId)
+  const plan = cards.find(c => c.plan)?.plan
+  const file = {
+    id,
+    auth_index: id,
+    provider: mappedProvider,
+    email: accountLabelFor(cards, providerId),
+    ...(mappedProvider === 'antigravity' ? { project_id: 'magpie' } : {}),
+    ...(mappedProvider === 'codex' && plan ? { id_token: { plan_type: plan } } : {}),
+  }
+  return {
+    id,
+    magpieProvider: providerId,
+    mappedProvider,
+    file,
+    payload,
+    credits: mappedProvider === 'codex' ? buildCodexCredits(cards) : null,
   }
 }
 
@@ -42,17 +246,62 @@ function json(res, status, body) {
   res.end(JSON.stringify(body))
 }
 
-function createUsageServer({ loadCards, managementKey }) {
+function createUsageServer({ loadCards, managementKey, options = {} }) {
   if (!managementKey) throw new Error('Missing management key')
+  const includeProviders = normalizeFilterList(options.includeProviders)
+  const excludeProviders = normalizeFilterList(options.excludeProviders)
+  const includeRemote = Boolean(options.includeRemote)
+
   let cached
   let pending
-  async function quotas() {
+  async function snapshot() {
     if (cached && Date.now() < cached.expires) return cached.value
     pending ??= Promise.resolve().then(loadCards).then(cards => {
-      const native = cards.filter(card => card.provider === 'codex' && card.kind === 'subscription')
-      const primary = quotaWindow(native, 18000)
-      const secondary = quotaWindow(native, 604800)
-      const value = primary || secondary ? { primary_window: primary, secondary_window: secondary } : null
+      const grouped = new Map()
+      const discovered = new Map()
+
+      for (const card of cards) {
+        if (!card?.provider) continue
+        const providerId = String(card.provider)
+        const remote = isRemoteCard(card)
+        const mapped = cliProxyProviderOf(providerId)
+        const hasQuota = numericWindows(card).length > 0
+        const explicitlyIncluded = includeProviders.length > 0 && matchesFilter(card, mapped, includeProviders)
+        const excluded = excludeProviders.length > 0 && matchesFilter(card, mapped, excludeProviders)
+        const enabled = Boolean(
+          mapped &&
+          hasQuota &&
+          !excluded &&
+          (includeProviders.length === 0 || explicitlyIncluded) &&
+          (!remote || includeRemote || explicitlyIncluded),
+        )
+
+        if (!discovered.has(providerId)) {
+          discovered.set(providerId, {
+            provider: providerId,
+            name: card.name || providerId,
+            cliProxyProvider: mapped,
+            remote,
+            hasQuota,
+            enabled,
+            accounts: 0,
+          })
+        }
+        discovered.get(providerId).accounts += 1
+
+        if (enabled) {
+          if (!grouped.has(providerId)) grouped.set(providerId, { mapped, cards: [] })
+          grouped.get(providerId).cards.push(card)
+        }
+      }
+
+      const entries = new Map()
+      for (const [providerId, { mapped, cards: groupCards }] of grouped) {
+        const entry = buildEntry(providerId, mapped, groupCards)
+        if (entry) entries.set(entry.id, entry)
+      }
+
+      const value = { entries, discovered: [...discovered.values()] }
       cached = { value, expires: Date.now() + 15000 }
       return value
     }).finally(() => { pending = undefined })
@@ -66,10 +315,12 @@ function createUsageServer({ loadCards, managementKey }) {
     try {
       const path = new URL(req.url, 'http://localhost')
       if (req.method === 'GET' && path.pathname === management + 'auth-files') {
-        const files = await quotas()
-          ? [{ id: accountId, auth_index: accountId, provider: 'codex', email: 'Native Codex' }]
-          : []
-        return json(res, 200, { files })
+        const { entries } = await snapshot()
+        return json(res, 200, { files: [...entries.values()].map(e => e.file) })
+      }
+      if (req.method === 'GET' && path.pathname === management + 'providers') {
+        const { discovered } = await snapshot()
+        return json(res, 200, { providers: discovered })
       }
       if (req.method === 'GET' && path.pathname === management + 'auth-files/models') {
         return json(res, 501, { error: 'Per-account model routing is unavailable' })
@@ -86,15 +337,49 @@ function createUsageServer({ loadCards, managementKey }) {
       try { call = JSON.parse(body) } catch {
         return json(res, 400, { error: 'Invalid JSON' })
       }
-      if (call?.method !== 'GET' || ![wham + 'usage', wham + 'rate-limit-reset-credits'].includes(call.url)) {
+      const { entries } = await snapshot()
+      const entry = entries.get(call?.auth_index)
+      if (!entry) return json(res, 404, { error: 'Unknown account' })
+
+      if (entry.mappedProvider === 'codex') {
+        if (call.method === 'GET' && call.url === CODEX_USAGE_URL) {
+          return json(res, 200, { status_code: 200, body: JSON.stringify(entry.payload) })
+        }
+        if (call.method === 'GET' && call.url === CODEX_CREDITS_URL) {
+          if (!entry.credits) return json(res, 501, { error: 'Reset credit lookup is unavailable' })
+          return json(res, 200, { status_code: 200, body: JSON.stringify(entry.credits) })
+        }
         return json(res, 405, { error: 'Unsupported operation' })
       }
-      if (call.auth_index !== accountId) return json(res, 404, { error: 'Unknown account' })
-      if (call.url !== wham + 'usage') {
-        return json(res, 501, { error: 'Reset credit lookup is unavailable' })
+
+      if (entry.mappedProvider === 'claude') {
+        if (call.method === 'GET' && String(call.url ?? '').startsWith(CLAUDE_USAGE_URL)) {
+          return json(res, 200, { status_code: 200, body: JSON.stringify(entry.payload) })
+        }
+        return json(res, 405, { error: 'Unsupported operation' })
       }
-      const result = { rate_limit: await quotas() }
-      return json(res, 200, { status_code: 200, body: JSON.stringify(result) })
+
+      if (entry.mappedProvider === 'antigravity') {
+        if (call.method === 'POST' && call.url === ANTIGRAVITY_SUMMARY_URL) {
+          return json(res, 200, { status_code: 200, body: JSON.stringify(entry.payload) })
+        }
+        if (call.method === 'GET' && call.url === GOOGLE_USERINFO_URL) {
+          return json(res, 200, { status_code: 404, body: JSON.stringify({ error: 'Unavailable' }) })
+        }
+        if (call.method === 'POST' && call.url === ANTIGRAVITY_MODELS_URL) {
+          return json(res, 501, { error: 'Per-model Antigravity lookup is unavailable' })
+        }
+        return json(res, 405, { error: 'Unsupported operation' })
+      }
+
+      if (entry.mappedProvider === 'xai') {
+        if (call.method === 'GET' && call.url === GROK_USAGE_URL) {
+          return json(res, 200, { status_code: 200, body: JSON.stringify(entry.payload) })
+        }
+        return json(res, 405, { error: 'Unsupported operation' })
+      }
+
+      return json(res, 405, { error: 'Unsupported operation' })
     } catch {
       return json(res, 502, { error: 'Could not read local Magpie quota cards' })
     }
@@ -124,6 +409,15 @@ async function resolveManagementKey(configDir, options) {
     if (err?.code !== 'EEXIST') throw err
   })
   return (await readFile(keyPath, 'utf8')).trim()
+}
+
+function resolvePort(options) {
+  const raw = options?.port ?? process.env.MAGPIE_CLIPROXY_USAGE_PORT ?? process.env.MAGPIE_T3_USAGE_PORT ?? 3426
+  const port = Number(raw)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid port: ${raw}`)
+  }
+  return port
 }
 
 async function isAlreadyServing(host, port, managementKey) {
@@ -174,20 +468,12 @@ async function start(options = {}) {
   if (listener) return listener
   const configDir = join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'magpie')
   const managementKey = await resolveManagementKey(configDir, options)
-  const port = Number(
-    options?.port ??
-    process.env.MAGPIE_CLIPROXY_USAGE_PORT ??
-    process.env.MAGPIE_T3_USAGE_PORT ??
-    3426,
-  )
-  const host = String(
-    options?.host ??
-    process.env.MAGPIE_CLIPROXY_USAGE_HOST ??
-    '127.0.0.1',
-  )
+  const port = resolvePort(options)
+  const host = String(options?.host ?? process.env.MAGPIE_CLIPROXY_USAGE_HOST ?? '127.0.0.1')
 
   const server = createUsageServer({
     managementKey,
+    options,
     loadCards: async () => {
       const { addr } = JSON.parse(await readFile(join(configDir, 'gateway.json'), 'utf8'))
       const gwPort = /:(\d+)$/.exec(addr)?.[1]
@@ -220,7 +506,7 @@ export default {
   server: MagpieCliProxyUsagePlugin,
 }
 
-export { createUsageServer, resolveManagementKey }
+export { createUsageServer, resolveManagementKey, resolvePort }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await start()
