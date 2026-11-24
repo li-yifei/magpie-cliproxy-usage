@@ -1,0 +1,42 @@
+{
+  "name": "magpie-cliproxy-usage",
+  "version": "0.1.0",
+  "description": "Magpie plugin exposing local quota snapshots as a CLIProxyAPI-compatible management usage API.",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test.mjs"
+  },
+  "keywords": [
+    "magpie-plugin",
+    "magpie",
+    "cliproxyapi",
+    "usage",
+    "quota",
+    "codex"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/li-yifei/magpie-cliproxy-usage.git"
+  },
+  "homepage": "https://github.com/li-yifei/magpie-cliproxy-usage#readme",
+  "bugs": {
+    "url": "https://github.com/li-yifei/magpie-cliproxy-usage/issues"
+  },
+  "magpie": {
+    "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMxMTI0M2MiLz48cmVjdCB4PSIxMiIgeT0iMzQiIHdpZHRoPSI5IiBoZWlnaHQ9IjE4IiByeD0iMyIgZmlsbD0iIzM4YmRmOCIvPjxyZWN0IHg9IjI3IiB5PSIyMiIgd2lkdGg9IjkiIGhlaWdodD0iMzAiIHJ4PSIzIiBmaWxsPSIjNjM2NmYxIi8+PHJlY3QgeD0iNDIiIHk9IjEyIiB3aWR0aD0iOSIgaGVpZ2h0PSI0MCIgcng9IjMiIGZpbGw9IiMzNGQzOTkiLz48L3N2Zz4=",
+    "options": {
+      "port": 3426,
+      "host": "127.0.0.1"
+    }
+  }
+}
