@@ -14,12 +14,20 @@ const codexUsage = 'https://chatgpt.com/backend-api/wham/usage'
 const claudeUsage = 'https://api.anthropic.com/api/oauth/usage'
 const grokUsage = 'https://cli-chat-proxy.grok.com/v1/billing?format=credits'
 
-test('declares plugin options without gateway middleware', async () => {
+test('declares page plugin manifest and options without gateway middleware', async () => {
   const manifest = JSON.parse(await readFile(new URL('package.json', import.meta.url), 'utf8'))
-  assert.equal(manifest.version, '0.3.0')
+  assert.equal(manifest.version, '0.4.0')
+  assert.ok(manifest.keywords.includes('magpie-page'))
   assert.equal(manifest.magpie.options.allowNonLoopback, false)
   assert.equal(manifest.magpie.middleware, undefined)
   assert.ok(!manifest.files.includes('options.middleware.js'))
+  assert.equal(manifest.magpie.page.file, 'page/index.html')
+  assert.equal(manifest.magpie.page.icon, 'page/icon.svg')
+  assert.ok(manifest.files.includes('page'))
+  const html = await readFile(new URL(manifest.magpie.page.file, import.meta.url), 'utf8')
+  assert.ok(html.includes('_magpie/bridge.js'))
+  const icon = await readFile(new URL(manifest.magpie.page.icon, import.meta.url), 'utf8')
+  assert.ok(icon.includes('<svg'))
 })
 
 function listen(server, host = '127.0.0.1') {

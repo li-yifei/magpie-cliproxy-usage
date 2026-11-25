@@ -1,6 +1,6 @@
 {
   "name": "magpie-cliproxy-usage",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Magpie plugin exposing local quota snapshots as a CLIProxyAPI-compatible management usage API.",
   "type": "module",
   "main": "./index.mjs",
@@ -9,6 +9,7 @@
   },
   "files": [
     "index.mjs",
+    "page",
     "README.md",
     "LICENSE"
   ],
@@ -17,6 +18,7 @@
   },
   "keywords": [
     "magpie-plugin",
+    "magpie-page",
     "magpie",
     "cliproxyapi",
     "usage",
@@ -35,6 +37,11 @@
     "url": "https://github.com/li-yifei/magpie-cliproxy-usage/issues"
   },
   "magpie": {
+    "name": "CLIProxyAPI Usage",
+    "summary": {
+      "en": "Expose local Magpie quota snapshots as a CLIProxyAPI-compatible management usage API.",
+      "zh": "将本机 Magpie 额度快照暴露为 CLIProxyAPI 兼容的用量管理接口。"
+    },
     "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMxMTI0M2MiLz48cmVjdCB4PSIxMiIgeT0iMzQiIHdpZHRoPSI5IiBoZWlnaHQ9IjE4IiByeD0iMyIgZmlsbD0iIzM4YmRmOCIvPjxyZWN0IHg9IjI3IiB5PSIyMiIgd2lkdGg9IjkiIGhlaWdodD0iMzAiIHJ4PSIzIiBmaWxsPSIjNjM2NmYxIi8+PHJlY3QgeD0iNDIiIHk9IjEyIiB3aWR0aD0iOSIgaGVpZ2h0PSI0MCIgcng9IjMiIGZpbGw9IiMzNGQzOTkiLz48L3N2Zz4=",
     "options": {
       "port": 3426,
@@ -43,6 +50,15 @@
       "excludeProviders": [],
       "includeRemote": false,
       "allowNonLoopback": false
+    },
+    "page": {
+      "title": "CLIProxyAPI Usage",
+      "titles": {
+        "zh": "CLIProxyAPI 用量接口",
+        "zh-TW": "CLIProxyAPI 用量介面"
+      },
+      "file": "page/index.html",
+      "icon": "page/icon.svg"
     }
   }
 }
