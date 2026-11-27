@@ -16,7 +16,7 @@ const grokUsage = 'https://cli-chat-proxy.grok.com/v1/billing?format=credits'
 
 test('declares page plugin manifest and options without gateway middleware', async () => {
   const manifest = JSON.parse(await readFile(new URL('package.json', import.meta.url), 'utf8'))
-  assert.equal(manifest.version, '0.4.0')
+  assert.equal(manifest.version, '0.4.1')
   assert.ok(manifest.keywords.includes('magpie-page'))
   assert.equal(manifest.magpie.options.allowNonLoopback, false)
   assert.equal(manifest.magpie.middleware, undefined)
@@ -26,6 +26,10 @@ test('declares page plugin manifest and options without gateway middleware', asy
   assert.ok(manifest.files.includes('page'))
   const html = await readFile(new URL(manifest.magpie.page.file, import.meta.url), 'utf8')
   assert.ok(html.includes('_magpie/bridge.js'))
+  assert.ok(html.includes('src="app.js"'))
+  assert.ok(!/<script(?![^>]*\bsrc=)/i.test(html), 'page/index.html must not use inline scripts (blocked by Magpie CSP)')
+  const appJs = await readFile(new URL('page/app.js', import.meta.url), 'utf8')
+  assert.ok(appJs.includes('window.magpie?.options?.get'))
   const icon = await readFile(new URL(manifest.magpie.page.icon, import.meta.url), 'utf8')
   assert.ok(icon.includes('<svg'))
 })

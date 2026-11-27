@@ -1,6 +1,6 @@
 {
   "name": "magpie-cliproxy-usage",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Magpie plugin exposing local quota snapshots as a CLIProxyAPI-compatible management usage API.",
   "type": "module",
   "main": "./index.mjs",
